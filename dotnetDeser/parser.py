@@ -1,4 +1,6 @@
-from construct import Struct, Int8ul, Int32ul, this, VarInt, Peek, Enum, Byte, Bytes, Switch, GreedyRange, Array, Construct, ListContainer, Int16ul, Int64ul, RepeatUntil, Int16sl, Int32sl, Int64sl, Flag
+from construct import Struct, Int8ul, Int32ul, this, VarInt, Peek, Enum, Byte, Bytes, Switch, GreedyRange, Array, Construct, ListContainer, Int16ul, Int64ul, RepeatUntil, Int16sl, Int32sl, Int64sl, Flag, If, Computed, LazyBound
+import functools
+import operator
 
 RecordTypeEnum = Enum(Byte,
     SerializedStreamHeader=0,
@@ -125,6 +127,7 @@ class MemberValues(Construct):
         d = {
             BinaryTypeEnumeration.Primitive: self.parse_primitive,
             BinaryTypeEnumeration.Class: self.parse_cls,
+            BinaryTypeEnumeration.SystemClass: self.parse_cls,
             BinaryTypeEnumeration.String: self.parse_string,
             BinaryTypeEnumeration.PrimitiveArray: self.parse_array,
         }
@@ -136,7 +139,6 @@ class MemberValues(Construct):
         return p._parse(stream, context, path)
 
     def parse_cls(self, info, stream, context, path):
-        name = info.TypeName.data.decode("utf8")
         return Record._parse(stream, context, path)
 
     def parse_string(self, info, stream, context, path):
@@ -165,6 +167,38 @@ ArraySinglePrimitive = Struct(
     "ArrayInfo" / ArrayInfo,
     "PrimitiveTypeEnum" / PrimitiveTypeEnumeration,
     "Values" / Array(this.ArrayInfo.Length, Switch(this.PrimitiveTypeEnum, PrimitiveTypeParsers)))
+
+BinaryArrayTypeEnumeration = Enum(Byte,
+    Single=0,
+    Jagged=1,
+    Rectangular=2,
+    SingleOffset=3,
+    JaggedOffset=4,
+    RectangularOffset=5)
+
+BinaryArray = Struct(
+    "RecordTypeEnum" / RecordTypeEnum,
+    "ObjectId" / Int32ul,
+    "BinaryArrayTypeEnum" / BinaryArrayTypeEnumeration,
+    "Rank" / Int32ul,
+    "Lengths" / Array(this.Rank, Int32ul),
+    "LowerBounds" / If(this.BinaryArrayTypeEnum == BinaryArrayTypeEnumeration.SingleOffset or this.BinaryArrayTypeEnum == BinaryArrayTypeEnumeration.JaggedOffset or this.BinaryArrayTypeEnum == BinaryArrayTypeEnumeration.RectangularOffset, Array(this.Rank, Int32sl)),
+    "TypeEnum" / BinaryTypeEnumeration,
+    "Infos" / Switch(this.TypeEnum, {
+        BinaryTypeEnumeration.Primitive: PrimitiveTypeEnumeration,
+        BinaryTypeEnumeration.SystemClass: LengthPrefixedString,
+        BinaryTypeEnumeration.Class: ClassTypeInfo,
+        BinaryTypeEnumeration.PrimitiveArray: PrimitiveTypeEnumeration},
+        default=None),
+    "CountElts" / Computed(lambda ctx: functools.reduce(operator.mul, ctx.Lengths, 1)),
+    "Values" / Array(this.CountElts, Switch(this.TypeEnum, {
+            BinaryTypeEnumeration.Primitive: Switch(this.Infos, PrimitiveTypeParsers),
+            BinaryTypeEnumeration.String: LengthPrefixedString,
+            BinaryTypeEnumeration.PrimitiveArray: LazyBound(lambda: Record),
+            BinaryTypeEnumeration.Class: LazyBound(lambda: Record),
+            BinaryTypeEnumeration.SystemClass: LazyBound(lambda: Record),
+        })))
+
 
 # Records
 SerializationHeaderRecord = Struct(
@@ -200,6 +234,14 @@ MemberReference = Struct(
     "RecordTypeEnum" / RecordTypeEnum,
     "IdRef" / Int32ul)
 
+ClassWithId = Struct(
+    "RecordTypeEnum" / RecordTypeEnum,
+    "ObjectId" / Int32ul,
+    "MetadataId" / Int32ul)
+
+ObjectNull = Struct(
+    "RecordTypeEnum" / RecordTypeEnum)
+
 
 Record = Struct(
     "RecordTypeEnum" / Peek(RecordTypeEnum),
@@ -211,6 +253,9 @@ Record = Struct(
         RecordTypeEnum.MemberReference: MemberReference,
         RecordTypeEnum.SystemClassWithMembers: SystemClassWithMembers,
         RecordTypeEnum.ArraySinglePrimitive: ArraySinglePrimitive,
+        RecordTypeEnum.ClassWithId: ClassWithId,
+        RecordTypeEnum.ObjectNull: ObjectNull,
+        RecordTypeEnum.BinaryArray: BinaryArray
         }
     ))
 
