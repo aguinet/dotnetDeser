@@ -113,10 +113,7 @@ class MemberValues(Construct):
         self._relativeToId = relativeToId
 
     def _parse(self, stream, context, path):
-        allClses = context._root.get('__allClses', None)
-        if allClses is None:
-            allClses = dict()
-            context._root['__allClses'] = allClses
+        allClses = self._allClses
         if not self._relativeToId:
             types_ = context.MemberTypeInfo.BinaryTypeEnums
             infos = context.MemberTypeInfo.Infos
@@ -143,8 +140,8 @@ class MemberValues(Construct):
             BinaryTypeEnumeration.Primitive: self.parse_primitive,
             BinaryTypeEnumeration.Class: self.parse_cls,
             BinaryTypeEnumeration.SystemClass: self.parse_cls,
-            BinaryTypeEnumeration.String: self.parse_string,
-            BinaryTypeEnumeration.PrimitiveArray: self.parse_array,
+            BinaryTypeEnumeration.String: self.parse_cls,
+            BinaryTypeEnumeration.PrimitiveArray: self.parse_cls,
         }
         p = d[ty]
         return p(info, stream, context, path)
@@ -154,12 +151,6 @@ class MemberValues(Construct):
         return p._parse(stream, context, path)
 
     def parse_cls(self, info, stream, context, path):
-        return Record._parse(stream, context, path)
-
-    def parse_string(self, info, stream, context, path):
-        return BinaryObjectString._parse(stream, context, path)
-
-    def parse_array(self, info, stream, context, path):
         return Record._parse(stream, context, path)
 
     def _build(self, obj, stream, context, path):
@@ -194,7 +185,7 @@ ArraySinglePrimitive = Struct(
     "RecordTypeEnum" / RecordTypeEnum,
     "ArrayInfo" / ArrayInfo,
     "PrimitiveTypeEnum" / PrimitiveTypeEnumeration,
-    "Values" / Array(this.ArrayInfo.Length, Switch(this.PrimitiveTypeEnum, PrimitiveTypeParsers)))
+    "Values" / Switch(this.PrimitiveTypeEnum, {k: Array(this.ArrayInfo.Length, v) for k,v in PrimitiveTypeParsers.items()}))
 
 BinaryArrayTypeEnumeration = Enum(Byte,
     Single=0,
@@ -298,4 +289,5 @@ Record = Struct(
 AllRecords = RepeatUntil(lambda obj,lst,ctx: obj.RecordTypeEnum == RecordTypeEnum.MessageEnd, Record)
 
 def parse(data):
+    MemberValues._allClses = {}
     return AllRecords.parse(data)
