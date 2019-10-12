@@ -2,6 +2,7 @@ from construct import Struct, Int8ul, Int32ul, this, VarInt, Peek, Enum, Byte, B
 import functools
 import operator
 
+# https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-nrbf/954a0657-b901-4813-9398-4ec732fe8b32
 RecordTypeEnum = Enum(Byte,
     SerializedStreamHeader=0,
     ClassWithId=1,
@@ -63,6 +64,9 @@ PrimitiveTypeEnumeration = Enum(Byte,
     Null=17,
     String=18)
 
+DateTime = Struct(
+    "Value" / Int64ul)
+
 PrimitiveTypeParsers = {
     PrimitiveTypeEnumeration.Boolean: Flag,
     PrimitiveTypeEnumeration.Byte: Byte,
@@ -72,6 +76,7 @@ PrimitiveTypeParsers = {
     PrimitiveTypeEnumeration.UInt16: Int16ul,
     PrimitiveTypeEnumeration.UInt32: Int32ul,
     PrimitiveTypeEnumeration.UInt64: Int64ul,
+    PrimitiveTypeEnumeration.DateTime: DateTime
 }
 
 ClassTypeInfo = Struct(
@@ -101,13 +106,23 @@ class AddInfos(Construct):
         raise SizeofError()
 
 class MemberValues(Construct):
-    def __init__(self, cls_parsers):
+    _allClses = {}
+
+    def __init__(self, relativeToId):
         super().__init__()
-        self._cls_parsers = cls_parsers
+        self._relativeToId = relativeToId
 
     def _parse(self, stream, context, path):
-        types_ = context.MemberTypeInfo.BinaryTypeEnums
-        infos = context.MemberTypeInfo.Infos
+        allClses = context._root.get('__allClses', None)
+        if allClses is None:
+            allClses = dict()
+            context._root['__allClses'] = allClses
+        if not self._relativeToId:
+            types_ = context.MemberTypeInfo.BinaryTypeEnums
+            infos = context.MemberTypeInfo.Infos
+            allClses[context.ClassInfo.ObjectId] = (types_,infos)
+        else:
+            types_, infos = allClses[context.MetadataId]
         hasExtraInfos = (
             BinaryTypeEnumeration.PrimitiveArray,
             BinaryTypeEnumeration.Primitive,
@@ -152,6 +167,19 @@ class MemberValues(Construct):
 
     def _sizeof(self, context, path):
         raise SizeofError()
+
+class SystemMemberValues(Construct):
+    _allClses = {}
+
+    def __init__(self):
+        super().__init__()
+
+    def _parse(self, stream, context, path):
+        count = context.ClassInfo.MemberCount
+        print("count")
+        for i in range(count):
+            ret.append(Record._parse(stream, contextn, path))
+        return ListContainer(ret)
 
 MemberTypeInfo = Struct(
     "BinaryTypeEnums" / Array(this._.ClassInfo.MemberCount, BinaryTypeEnumeration),
@@ -223,21 +251,28 @@ ClassWithMembersAndTypes = Struct(
     "ClassInfo" / ClassInfo,
     "MemberTypeInfo" / MemberTypeInfo,
     "LibraryId" / Int32ul,
-    "Values" / MemberValues({}))
+    "Values" / MemberValues(False))
 
 SystemClassWithMembers = Struct(
     "RecordTypeEnum" / RecordTypeEnum,
-    "ClassInfo" / ClassInfo
+    "ClassInfo" / ClassInfo,
+    "Values" / SystemMemberValues()
 )
 
 MemberReference = Struct(
     "RecordTypeEnum" / RecordTypeEnum,
     "IdRef" / Int32ul)
 
+MemberPrimitiveTyped = Struct(
+    "RecordTypeEnum" / RecordTypeEnum,
+    "PrimitiveTypeEnum" / PrimitiveTypeEnumeration,
+    "Value" / Switch(this.PrimitiveTypeEnum, PrimitiveTypeParsers))
+
 ClassWithId = Struct(
     "RecordTypeEnum" / RecordTypeEnum,
     "ObjectId" / Int32ul,
-    "MetadataId" / Int32ul)
+    "MetadataId" / Int32ul,
+    "Values" / MemberValues(True))
 
 ObjectNull = Struct(
     "RecordTypeEnum" / RecordTypeEnum)
@@ -255,7 +290,8 @@ Record = Struct(
         RecordTypeEnum.ArraySinglePrimitive: ArraySinglePrimitive,
         RecordTypeEnum.ClassWithId: ClassWithId,
         RecordTypeEnum.ObjectNull: ObjectNull,
-        RecordTypeEnum.BinaryArray: BinaryArray
+        RecordTypeEnum.BinaryArray: BinaryArray,
+        RecordTypeEnum.MemberPrimitiveTyped: MemberPrimitiveTyped
         }
     ))
 
