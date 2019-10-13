@@ -1,1 +1,1 @@
-from dotnetDeser.parser import parse
+from dotnetDeser.parser import parse, RecordTypeEnum
